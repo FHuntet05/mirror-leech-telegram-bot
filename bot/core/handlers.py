@@ -348,3 +348,16 @@ def add_handlers():
             filters=regex("^b_"),
         )
     )
+    TgClient.bot.add_handler(
+        MessageHandler(
+            search_subtitles,
+            filters=command(BotCommands.SubtitlesCommand, case_sensitive=True)
+            & CustomFilters.authorized,
+        )
+    )
+    TgClient.bot.add_handler(
+        CallbackQueryHandler(
+            subtitles_callback,
+            filters=regex("^sub_"),
+        )
+    )

@@ -164,6 +164,19 @@ class TelegramUploader:
             new_path = ospath.join(dirpath, f"{name}{ext}")
             await rename(self._up_path, new_path)
             self._up_path = new_path
+
+        is_video, _, _ = await get_document_type(self._up_path)
+        if is_video and not file_.startswith("SAMPLE."):
+            try:
+                from ...ext_utils.media_utils import get_audio_and_subtitle_details
+                audios, subtitles = await get_audio_and_subtitle_details(self._up_path)
+                if audios:
+                    cap_mono += f"\n🔊 <b>Audios:</b> {', '.join(audios[:3])}"
+                if subtitles:
+                    cap_mono += f"\n💬 <b>Subtítulos:</b> {', '.join(subtitles[:4])}"
+            except Exception as e:
+                LOGGER.debug(f"Caption media details error: {e}")
+
         return cap_mono
 
     def _get_input_media(self, subkey, key):

@@ -261,6 +261,25 @@ class TaskListener(TaskConfig):
             self.size = await get_path_size(up_dir)
             self.clear()
 
+        if Config.AUTO_EXTRACT_SUBTITLES:
+            try:
+                from ..ext_utils.media_utils import extract_embedded_subtitles, get_document_type
+                if self.is_file:
+                    is_vid, _, _ = await get_document_type(up_path)
+                    if is_vid:
+                        folder = ospath.dirname(up_path)
+                        await extract_embedded_subtitles(up_path, folder)
+                else:
+                    walk_data = await sync_to_async(lambda: list(walk(up_dir)))
+                    for r, _, f_list in walk_data:
+                        for f in f_list:
+                            fp = ospath.join(r, f)
+                            is_vid, _, _ = await get_document_type(fp)
+                            if is_vid:
+                                await extract_embedded_subtitles(fp, r)
+            except Exception as e:
+                LOGGER.debug(f"Auto extract subtitles error: {e}")
+
         if self.compress:
             up_path = await self.proceed_compress(
                 up_path,

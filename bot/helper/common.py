@@ -520,6 +520,9 @@ class TaskConfig:
             )
             self.split_size = min(self.split_size, self.max_split_size)
 
+            if not self.sample_video and Config.AUTO_SAMPLE_VIDEO and not self.compress:
+                self.sample_video = "60:4"
+
             if not self.as_doc:
                 self.as_doc = (
                     not self.as_med

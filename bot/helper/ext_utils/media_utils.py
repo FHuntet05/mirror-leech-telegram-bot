@@ -65,6 +65,113 @@ async def get_media_info(path):
     return 0, None, None
 
 
+async def get_audio_and_subtitle_details(path):
+    audios = []
+    subtitles = []
+    try:
+        result = await cmd_exec(
+            [
+                "ffprobe",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-print_format",
+                "json",
+                "-show_streams",
+                path,
+            ]
+        )
+        if result[0] and result[2] == 0:
+            import json
+            data = json.loads(result[0])
+            streams = data.get("streams", [])
+            lang_map = {
+                "spa": "Español", "es": "Español", "esp": "Español", "spanish": "Español",
+                "lat": "Latino", "latino": "Latino",
+                "eng": "Inglés", "en": "Inglés", "english": "Inglés",
+                "fra": "Francés", "fr": "Francés", "french": "Francés",
+                "por": "Portugués", "pt": "Portugués", "portuguese": "Portugués",
+                "ita": "Italiano", "it": "Italiano",
+                "ger": "Alemán", "de": "Alemán", "deu": "Alemán",
+                "jpn": "Japonés", "ja": "Japonés",
+                "kor": "Coreano", "ko": "Coreano",
+                "chi": "Chino", "zh": "Chino", "zho": "Chino",
+                "rus": "Ruso", "ru": "Ruso",
+            }
+            for s in streams:
+                codec_type = s.get("codec_type")
+                tags = s.get("tags", {})
+                lang = tags.get("language") or tags.get("LANGUAGE") or tags.get("title") or tags.get("TITLE") or "und"
+                clean_lang = lang_map.get(lang.lower()[:3], lang.capitalize())
+
+                if codec_type == "audio":
+                    channels = s.get("channels")
+                    ch_str = f" {channels}.1" if channels == 6 else f" {channels}.0" if channels else ""
+                    codec = s.get("codec_name", "").upper()
+                    audios.append(f"{clean_lang}{ch_str} ({codec})" if codec else clean_lang)
+                elif codec_type == "subtitle":
+                    sub_title = tags.get("title") or clean_lang
+                    subtitles.append(sub_title)
+    except Exception as e:
+        LOGGER.debug(f"Error extracting streams details: {e}")
+
+    return audios, subtitles
+
+
+async def extract_embedded_subtitles(video_path, output_dir):
+    extracted = []
+    try:
+        result = await cmd_exec(
+            [
+                "ffprobe",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-print_format",
+                "json",
+                "-show_streams",
+                video_path,
+            ]
+        )
+        if result[0] and result[2] == 0:
+            import json
+            data = json.loads(result[0])
+            streams = data.get("streams", [])
+            sub_idx = 0
+            lang_map = {
+                "spa": "Español", "es": "Español", "esp": "Español",
+                "lat": "Latino", "latino": "Latino",
+                "eng": "Ingles", "en": "Ingles",
+                "fra": "Frances", "fr": "Frances",
+                "por": "Portugues", "pt": "Portugues",
+                "ita": "Italiano", "it": "Italiano",
+                "ger": "Aleman", "de": "Aleman",
+                "jpn": "Japones", "ja": "Japones",
+            }
+            for s in streams:
+                if s.get("codec_type") == "subtitle":
+                    tags = s.get("tags", {})
+                    lang = tags.get("language") or tags.get("title") or f"sub_{sub_idx + 1}"
+                    lang_name = lang_map.get(lang.lower()[:3], lang.capitalize())
+                    out_file = ospath.join(output_dir, f"{lang_name}_{sub_idx + 1}.srt" if sub_idx > 0 else f"{lang_name}.srt")
+
+                    cmd = [
+                        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                        "-i", video_path,
+                        "-map", f"0:s:{sub_idx}",
+                        "-c:s", "srt",
+                        out_file
+                    ]
+                    res = await cmd_exec(cmd)
+                    if res[2] == 0 and ospath.exists(out_file) and ospath.getsize(out_file) > 0:
+                        extracted.append(out_file)
+                        LOGGER.info(f"Extracted subtitle: {out_file}")
+                    sub_idx += 1
+    except Exception as e:
+        LOGGER.debug(f"Error extracting subtitles from {video_path}: {e}")
+    return extracted
+
+
 async def get_document_type(path):
     is_video, is_audio, is_image = False, False, False
     if (

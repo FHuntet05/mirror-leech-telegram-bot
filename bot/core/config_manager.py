@@ -146,6 +146,9 @@ class Config:
     DB_PATH = "multimedia_cache.db"
     WATERMARK_FOOTER = "\n\n📢 <b>Canal Oficial:</b> @fh_estrenos\n👤 <b>Admin:</b> @feft05"
     YT_DLP_OPTIONS = {}
+    OPENSUBTITLES_API_KEY = ""
+    AUTO_SAMPLE_VIDEO = True
+    AUTO_EXTRACT_SUBTITLES = True
 
     @classmethod
     def _convert(cls, key: str, value):

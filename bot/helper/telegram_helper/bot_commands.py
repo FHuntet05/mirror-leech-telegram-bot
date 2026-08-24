@@ -45,3 +45,4 @@ class BotCommands:
     RssCommand = f"rss{i}"
     NzbSearchCommand = f"nzbsearch{i}"
     BuscarCommand = [f"buscar{i}", f"b{i}"]
+    SubtitlesCommand = [f"subtitulos{i}", f"sub{i}"]
