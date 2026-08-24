@@ -34,6 +34,7 @@ from .status import task_status, status_pages
 from .users_settings import get_users_settings, edit_user_settings, send_user_settings
 from .ytdlp import ytdl, ytdl_leech
 from .gallery_dl import gallery_dl, gallery_dl_leech
+from .ai_search import buscar, ai_search_callback
 
 __all__ = [
     "send_bot_settings",
@@ -91,4 +92,6 @@ __all__ = [
     "ytdl_leech",
     "gallery_dl",
     "gallery_dl_leech",
+    "buscar",
+    "ai_search_callback",
 ]

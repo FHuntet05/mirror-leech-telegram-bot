@@ -335,3 +335,17 @@ def add_handlers():
             & CustomFilters.authorized,
         )
     )
+    TgClient.bot.add_handler(
+        MessageHandler(
+            buscar,
+            filters=command(BotCommands.BuscarCommand, case_sensitive=True)
+            & CustomFilters.authorized,
+        )
+    )
+    TgClient.bot.add_handler(
+        CallbackQueryHandler(
+            ai_search_callback,
+            filters=regex("^b_")
+            & CustomFilters.authorized,
+        )
+    )

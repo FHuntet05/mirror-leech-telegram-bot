@@ -1,6 +1,8 @@
-from uvloop import install
-
-install()
+try:
+    from uvloop import install
+    install()
+except ImportError:
+    pass
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -241,12 +243,27 @@ async def set_aria2(gid, selected_files):
         LOGGER.info(f"Verification Failed! Report! Gid: {gid}")
 
 
+@app.get("/health", response_class=JSONResponse)
+async def health_check():
+    return {
+        "status": "healthy",
+        "service": "SCRAPPER-FEFT Mirror-Leech Bot",
+        "qbittorrent": qbittorrent is not None,
+        "aria2": aria2 is not None
+    }
+
+
 @app.get("/", response_class=HTMLResponse)
 async def homepage():
     return (
-        "<h1>See mirror-leech-telegram-bot "
-        "<a href='https://www.github.com/anasty17/mirror-leech-telegram-bot'>@GitHub</a> "
-        "By <a href='https://github.com/anasty17'>Anas</a></h1>"
+        "<html><head><title>SCRAPPER-FEFT Engine</title>"
+        "<style>body{font-family:sans-serif;background:#121212;color:#eee;text-align:center;padding:50px;}"
+        "h1{color:#00e676;}a{color:#29b6f6;text-decoration:none;}</style></head>"
+        "<body><h1>⚡ SCRAPPER-FEFT + Mirror-Leech Engine</h1>"
+        "<p>AI Scraper (TMDb + Prowlarr + OpenRouter) & High-Speed MTProto 4GB Leech Bot activo y funcionando.</p>"
+        "<p>📢 Canal Oficial: <a href='https://t.me/fh_estrenos'>@fh_estrenos</a> | 👤 Admin: <a href='https://t.me/feft05'>@feft05</a></p>"
+        "<p><a href='/health'>Health Check Endpoint</a> | <a href='/app/files'>File Selector UI</a></p>"
+        "</body></html>"
     )
 
 

@@ -17,7 +17,7 @@ httpx
 jinja2
 lxml
 natsort
-par2cmdline-turbo
+par2cmdline-turbo; sys_platform != 'win32'
 pillow
 psutil
 pymongo
@@ -26,10 +26,18 @@ python-magic
 requests
 telegraph
 tenacity
-tgcrypto
+TgCrypto-pyrofork>=1.2.8
 urllib3
 uvicorn
-uvloop
-xattr
+uvloop; sys_platform != 'win32'
+xattr; sys_platform != 'win32'
 gallery-dl
 yt-dlp[default,curl-cffi]
+telethon
+beautifulsoup4
+duckduckgo-search
+py7zr
+rarfile
+python-dotenv
+pyaes
+rsa

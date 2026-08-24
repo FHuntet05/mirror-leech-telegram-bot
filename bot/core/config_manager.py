@@ -1,8 +1,59 @@
 from importlib import import_module
 from ast import literal_eval
 from os import getenv
+import base64
+import os
+import struct
 
 from bot import LOGGER
+
+
+def convert_telethon_to_pyrogram_session(telethon_str: str, api_id: int, user_id: int = 0) -> str:
+    if not telethon_str:
+        return ""
+    try:
+        from telethon.sessions import StringSession
+        s = StringSession(telethon_str)
+        if not s.auth_key or not s.auth_key.key:
+            return ""
+        packed = struct.pack(
+            ">BI?256sQ?",
+            s.dc_id,
+            int(api_id),
+            False,
+            s.auth_key.key,
+            int(user_id) if user_id else 0,
+            False
+        )
+        return base64.urlsafe_b64encode(packed).decode().rstrip("=")
+    except Exception as e:
+        LOGGER.warning(f"Failed to autoconvert Telethon session: {e}")
+        return ""
+
+
+def setup_global_cookies():
+    all_cookies = ["# Netscape HTTP Cookie File\n# Multi-platform Cookies Engine\n"]
+    for var_name in ["GLOBAL_COOKIES_BASE64", "YOUTUBE_COOKIES_BASE64", "FACEBOOK_COOKIES_BASE64", "INSTAGRAM_COOKIES_BASE64"]:
+        b64_env = getenv(var_name, "").strip()
+        if b64_env:
+            try:
+                decoded = base64.b64decode(b64_env).decode('utf-8', errors='ignore')
+                all_cookies.append(decoded)
+                LOGGER.info(f"Loaded cookies from {var_name} ({len(decoded)} bytes)")
+            except Exception as e:
+                LOGGER.error(f"Error decoding {var_name}: {e}")
+    for var_name in ["GLOBAL_COOKIES_TEXT", "YOUTUBE_COOKIES_TEXT", "FACEBOOK_COOKIES_TEXT"]:
+        txt_env = getenv(var_name, "").strip()
+        if txt_env:
+            all_cookies.append(txt_env)
+    if len(all_cookies) > 1:
+        for path in ["cookies.txt", "/app/cookies.txt"]:
+            try:
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write("\n".join(all_cookies))
+                LOGGER.info(f"Cookies saved to {path}")
+            except Exception:
+                pass
 
 
 class Config:
@@ -77,6 +128,23 @@ class Config:
     USER_TRANSMISSION = False
     USE_SERVICE_ACCOUNTS = False
     WEB_PINCODE = False
+    # AI Scraper & Media
+    OPENROUTER_API_KEY = ""
+    TMDB_API_KEY = ""
+    PROWLARR_URL = ""
+    PROWLARR_API_KEY = ""
+    YOUTUBE_COOKIES_BASE64 = ""
+    FACEBOOK_COOKIES_BASE64 = ""
+    STORAGE_CHANNEL_ID = 0
+    ADMIN_USER_ID = 0
+    TELEGRAM_BOT_TOKEN = ""
+    TELEGRAM_API_ID = 0
+    TELEGRAM_API_HASH = ""
+    TELETHON_STRING_SESSION = ""
+    PRIMARY_MODEL = "google/gemini-2.5-flash-lite"
+    FALLBACK_MODEL = "meta-llama/llama-3.3-70b-instruct:free"
+    DB_PATH = "multimedia_cache.db"
+    WATERMARK_FOOTER = "\n\n📢 <b>Canal Oficial:</b> @fh_estrenos\n👤 <b>Admin:</b> @feft05"
     YT_DLP_OPTIONS = {}
 
     @classmethod
@@ -197,11 +265,34 @@ class Config:
 
     @classmethod
     def _load_from_env(cls) -> None:
+        try:
+            from dotenv import load_dotenv
+            load_dotenv()
+        except ImportError:
+            pass
+
+        # Aliases mapping
+        env_aliases = {
+            "BOT_TOKEN": ["TELEGRAM_BOT_TOKEN"],
+            "OWNER_ID": ["ADMIN_USER_ID"],
+            "TELEGRAM_API": ["TELEGRAM_API_ID"],
+            "TELEGRAM_HASH": ["TELEGRAM_API_HASH"],
+            "LEECH_DUMP_CHAT": ["STORAGE_CHANNEL_ID"],
+            "USER_SESSION_STRING": ["PYROGRAM_STRING_SESSION", "KURIGRAM_STRING_SESSION"],
+        }
+
         for attr in dir(cls):
             if not cls._is_valid_config_attr(attr):
                 continue
 
             env_value = getenv(attr)
+            if env_value is None and attr in env_aliases:
+                for alt in env_aliases[attr]:
+                    alt_val = getenv(alt)
+                    if alt_val is not None:
+                        env_value = alt_val
+                        break
+
             if env_value is None:
                 continue
 
@@ -209,8 +300,42 @@ class Config:
             if processed_value is not None:
                 setattr(cls, attr, processed_value)
 
+        # Handle Telethon session conversion if USER_SESSION_STRING is missing
+        if not cls.USER_SESSION_STRING:
+            tele_str = getenv("TELETHON_STRING_SESSION", "").strip()
+            if not tele_str:
+                if os.path.exists("string_session.txt"):
+                    try:
+                        with open("string_session.txt", "r", encoding="utf-8") as f:
+                            tele_str = f.read().strip()
+                    except Exception:
+                        pass
+            if tele_str and cls.TELEGRAM_API:
+                converted = convert_telethon_to_pyrogram_session(
+                    tele_str, cls.TELEGRAM_API, cls.OWNER_ID
+                )
+                if converted:
+                    cls.USER_SESSION_STRING = converted
+                    cls.USER_TRANSMISSION = True
+                    cls.HYBRID_LEECH = True
+                    LOGGER.info("Successfully converted Telethon StringSession to Pyrogram session!")
+
+        setup_global_cookies()
+
     @classmethod
     def _validate_required_config(cls) -> None:
+        # Check aliases
+        if not cls.BOT_TOKEN and cls.TELEGRAM_BOT_TOKEN:
+            cls.BOT_TOKEN = cls.TELEGRAM_BOT_TOKEN
+        if not cls.OWNER_ID and cls.ADMIN_USER_ID:
+            cls.OWNER_ID = cls.ADMIN_USER_ID
+        if not cls.TELEGRAM_API and cls.TELEGRAM_API_ID:
+            cls.TELEGRAM_API = cls.TELEGRAM_API_ID
+        if not cls.TELEGRAM_HASH and cls.TELEGRAM_API_HASH:
+            cls.TELEGRAM_HASH = cls.TELEGRAM_API_HASH
+        if not cls.LEECH_DUMP_CHAT and cls.STORAGE_CHANNEL_ID:
+            cls.LEECH_DUMP_CHAT = str(cls.STORAGE_CHANNEL_ID)
+
         required_keys = ["BOT_TOKEN", "OWNER_ID", "TELEGRAM_API", "TELEGRAM_HASH"]
 
         for key in required_keys:

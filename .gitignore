@@ -1,4 +1,5 @@
 mltbenv/*
+.venv/
 config.py
 token.pickle
 rclone.conf
@@ -15,3 +16,6 @@ cookies.txt
 downloads/*
 *.session
 __pycache__/
+.env
+string_session.txt
+multimedia_cache.db

@@ -45,7 +45,7 @@ def load_config() -> Dict[str, Any]:
     except ModuleNotFoundError:
         log_info("Config module not found, loading from environment variables...")
         return {
-            "BOT_TOKEN": getenv("BOT_TOKEN", ""),
+            "BOT_TOKEN": getenv("BOT_TOKEN", "") or getenv("TELEGRAM_BOT_TOKEN", ""),
             "DATABASE_URL": getenv("DATABASE_URL", ""),
             "DATABASE_NAME": getenv("DATABASE_NAME", "mltb"),
             "UPSTREAM_REPO": getenv("UPSTREAM_REPO", ""),
@@ -55,9 +55,9 @@ def load_config() -> Dict[str, Any]:
 
 config_file = load_config()
 
-BOT_TOKEN = config_file.get("BOT_TOKEN", "")
+BOT_TOKEN = config_file.get("BOT_TOKEN", "") or getenv("TELEGRAM_BOT_TOKEN", "")
 if not BOT_TOKEN:
-    log_error("BOT_TOKEN variable is missing! Exiting now")
+    log_error("BOT_TOKEN / TELEGRAM_BOT_TOKEN variable is missing! Exiting now")
     exit(1)
 
 BOT_ID = BOT_TOKEN.split(":", 1)[0]
