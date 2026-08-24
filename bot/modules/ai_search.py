@@ -24,8 +24,11 @@ from ..helper.telegram_helper.message_utils import send_message, edit_message, d
 from ..helper.telegram_helper.button_build import ButtonMaker
 from .mirror_leech import Mirror
 
-# Base de datos en memoria / archivo para guardar resultados temporales de búsqueda
+# Caché de sesiones de búsqueda (resultados + paginación)
 SEARCH_SESSION_CACHE = {}
+
+# Resultados por página en la paginación
+RESULTS_PER_PAGE = 5
 
 # ==============================================================================
 # BASE DE DATOS LOCAL Y CACHÉ (SQLite)
@@ -178,9 +181,9 @@ def buscar_tmdb_serie(query: str):
         return None
 
 # ==============================================================================
-# MOTOR PROWLARR: INDEXERS TORZNAB (TPB, SHOWRSS, YTS, ETC.)
+# MOTOR PROWLARR: BÚSQUEDA MASIVA EN TODOS LOS INDEXERS
 # ==============================================================================
-def buscar_prowlarr(query: str, limit=8):
+def buscar_prowlarr(query: str, limit=20):
     prowlarr_url = Config.PROWLARR_URL
     prowlarr_key = Config.PROWLARR_API_KEY
     if not prowlarr_url or not prowlarr_key:
@@ -189,6 +192,48 @@ def buscar_prowlarr(query: str, limit=8):
     results = []
     ignorar = ["manyvids", "parody", "xxx", "porn", "hentai"]
 
+    # Intentar API v1/search (busca en TODOS los indexers de una vez)
+    try:
+        search_url = f"{prowlarr_url.rstrip('/')}/api/v1/search"
+        params = {"query": query, "type": "search", "limit": limit * 2}
+        headers = {"X-Api-Key": prowlarr_key}
+        resp = requests.get(search_url, headers=headers, params=params, timeout=20)
+        if resp.status_code == 200:
+            data = resp.json()
+            for item in data:
+                title = item.get("title", "")
+                if any(bad in title.lower() for bad in ignorar):
+                    continue
+
+                magnet = item.get("magnetUrl") or item.get("downloadUrl", "")
+                if not magnet:
+                    guid = item.get("guid", "")
+                    if guid.startswith("magnet:"):
+                        magnet = guid
+                if not magnet:
+                    continue
+
+                size_bytes = item.get("size", 0)
+                size_str = f"{size_bytes / (1024**3):.2f} GB" if size_bytes > 1024**3 else f"{size_bytes / (1024**2):.1f} MB"
+                seeders = item.get("seeders", 0)
+                indexer = item.get("indexer", "Prowlarr")
+
+                results.append({
+                    "nombre": title,
+                    "peso": size_str,
+                    "seeders": str(seeders),
+                    "magnet": magnet,
+                    "fuente": f"🔍 {indexer}"
+                })
+
+                if len(results) >= limit:
+                    break
+            if results:
+                return results
+    except Exception as e:
+        LOGGER.debug(f"Prowlarr v1/search error (trying per-indexer fallback): {e}")
+
+    # Fallback: buscar por indexer individual (Torznab)
     try:
         idx_url = f"{prowlarr_url.rstrip('/')}/api/v1/indexer"
         idx_resp = requests.get(idx_url, headers={"X-Api-Key": prowlarr_key}, timeout=10)
@@ -230,8 +275,6 @@ def buscar_prowlarr(query: str, limit=8):
                     for attr in item.findall("torznab:attr", ns):
                         if attr.get("name") == "magneturl":
                             magnet = attr.get("value", "")
-                        elif attr.get("name") == "seeders":
-                            seeders_val = attr.get("value", "0")
 
                     if not magnet and link.startswith("magnet:"):
                         magnet = link
@@ -252,7 +295,7 @@ def buscar_prowlarr(query: str, limit=8):
                         "peso": size_str,
                         "seeders": seeders,
                         "magnet": magnet,
-                        "fuente": f"Prowlarr/{indexer_name}"
+                        "fuente": f"🔍 {indexer_name}"
                     })
 
                     if len(results) >= limit:
@@ -268,9 +311,9 @@ def buscar_prowlarr(query: str, limit=8):
     return results
 
 # ==============================================================================
-# MOTOR TRACKERS: APIBAY FALLBACK
+# MOTOR TRACKERS: APIBAY (SIEMPRE ACTIVO, EN PARALELO)
 # ==============================================================================
-def buscar_torrents_trackers(query: str, limit=5):
+def buscar_torrents_trackers(query: str, limit=15):
     palabras_ruido = ["latino", "castellano", "descargar", "4k", "1080p", "720p", "estreno", "completa", "hd"]
     clean_words = [w for w in query.split() if w.lower() not in palabras_ruido]
     clean_query = " ".join(clean_words) if clean_words else query
@@ -300,7 +343,7 @@ def buscar_torrents_trackers(query: str, limit=5):
                         "peso": size_str,
                         "seeders": seeders,
                         "magnet": magnet,
-                        "fuente": "ApiBay"
+                        "fuente": "🌐 ApiBay"
                     })
                     if len(magnets) >= limit:
                         break
@@ -309,9 +352,9 @@ def buscar_torrents_trackers(query: str, limit=5):
     return magnets
 
 # ==============================================================================
-# MOTOR VIDEO: YT-DLP Y DAILYMOTION
+# MOTOR VIDEO: YT-DLP Y DAILYMOTION (LÍMITES AMPLIADOS)
 # ==============================================================================
-def buscar_youtube_ytdlp(query: str, limit=3):
+def buscar_youtube_ytdlp(query: str, limit=10):
     results = []
     try:
         import yt_dlp
@@ -325,7 +368,7 @@ def buscar_youtube_ytdlp(query: str, limit=3):
             ydl_opts["cookiefile"] = "cookies.txt"
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            search_results = ydl.extract_info(f"ytsearch{limit * 2}:{query}", download=False)
+            search_results = ydl.extract_info(f"ytsearch{limit * 3}:{query}", download=False)
             if not search_results or "entries" not in search_results:
                 return []
 
@@ -333,13 +376,16 @@ def buscar_youtube_ytdlp(query: str, limit=3):
                 if not entry:
                     continue
                 duration = entry.get("duration") or 0
-                if duration >= 900:  # Mayor a 15 minutos (capítulos completos)
+                if duration >= 60:  # Mínimo 1 minuto (antes era 15 min)
                     dur_min = int(duration) // 60
+                    dur_sec = int(duration) % 60
+                    dur_str = f"{dur_min}:{dur_sec:02d}"
                     results.append({
                         "nombre": entry.get("title", "Video YouTube"),
-                        "servidor": f"YouTube ({dur_min} min)",
-                        "url": entry.get("url") or f"https://www.youtube.com/watch?v={entry.get('id', '')}",
-                        "duracion_min": dur_min
+                        "servidor": "YT",
+                        "duracion": dur_str,
+                        "duracion_min": dur_min,
+                        "url": entry.get("url") or f"https://www.youtube.com/watch?v={entry.get('id', '')}"
                     })
                     if len(results) >= limit:
                         break
@@ -347,8 +393,8 @@ def buscar_youtube_ytdlp(query: str, limit=3):
         LOGGER.warning(f"Error buscando en YouTube: {e}")
     return results
 
-def buscar_plataformas_video(query: str, limit=3):
-    url = f"https://api.dailymotion.com/videos?search={quote_plus(query)}&limit=8&fields=id,title,url,duration"
+def buscar_plataformas_video(query: str, limit=5):
+    url = f"https://api.dailymotion.com/videos?search={quote_plus(query)}&limit=20&fields=id,title,url,duration"
     videos = []
     try:
         r = requests.get(url, timeout=6)
@@ -356,11 +402,14 @@ def buscar_plataformas_video(query: str, limit=3):
             data = r.json()
             for v in data.get("list", []):
                 dur_sec = int(v.get("duration", 0))
-                if dur_sec >= 600:
+                if dur_sec >= 60:  # Mínimo 1 minuto (antes era 10 min)
                     dur_min = dur_sec // 60
+                    dur_s = dur_sec % 60
+                    dur_str = f"{dur_min}:{dur_s:02d}"
                     videos.append({
                         "nombre": v.get("title", "Ver Video"),
-                        "servidor": f"Dailymotion ({dur_min} min)",
+                        "servidor": "DM",
+                        "duracion": dur_str,
                         "url": v.get("url", "")
                     })
                     if len(videos) >= limit:
@@ -372,10 +421,11 @@ def buscar_plataformas_video(query: str, limit=3):
 # ==============================================================================
 # MOTOR IA: OPENROUTER LLM EXTRACTOR
 # ==============================================================================
-def buscar_urls_en_web(query: str, max_links=4):
+def buscar_urls_en_web(query: str, max_links=6):
     search_queries = [
         f"{query} descargar mega 1fichier drive",
-        f"{query} capitulos completos ver online"
+        f"{query} capitulos completos ver online",
+        f"{query} download torrent"
     ]
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     links = []
@@ -479,7 +529,7 @@ Devuelve JSON:
     return None
 
 # ==============================================================================
-# PIPELINE DE BÚSQUEDA UNIVERSAL
+# PIPELINE DE BÚSQUEDA UNIVERSAL (PARALELO)
 # ==============================================================================
 def procesar_busqueda_universal(query: str):
     cached = get_from_cache(query)
@@ -500,34 +550,26 @@ def procesar_busqueda_universal(query: str):
                 unique_queries.append(q)
         search_queries = unique_queries
 
-    prowlarr_results = []
-    for sq in search_queries[:3]:
-        prowlarr_results.extend(buscar_prowlarr(sq, limit=4))
-        if len(prowlarr_results) >= 6:
-            break
+    # === EJECUTAR TODOS LOS MOTORES EN PARALELO ===
+    with ThreadPoolExecutor(max_workers=6) as executor:
+        # Prowlarr: buscar con múltiples queries
+        prowlarr_future = executor.submit(_buscar_prowlarr_multi, search_queries)
+        # ApiBay: SIEMPRE activo (no como fallback)
+        apibay_future = executor.submit(_buscar_apibay_multi, search_queries)
+        # YouTube
+        yt_future = executor.submit(_buscar_youtube_multi, search_queries)
+        # Dailymotion
+        dm_future = executor.submit(buscar_plataformas_video, query, 5)
+        # Web Scraping para DDL
+        web_future = executor.submit(_buscar_web_ia, query)
 
-    tracker_results = []
-    if len(prowlarr_results) < 2:
-        for sq in search_queries[:2]:
-            tracker_results.extend(buscar_torrents_trackers(sq, limit=3))
-            if tracker_results:
-                break
+        prowlarr_results = prowlarr_future.result()
+        tracker_results = apibay_future.result()
+        youtube_results = yt_future.result()
+        video_platform_results = dm_future.result()
+        ia_data = web_future.result()
 
-    youtube_results = []
-    for sq in search_queries[:2]:
-        youtube_results = buscar_youtube_ytdlp(sq, limit=3)
-        if youtube_results:
-            break
-
-    video_platform_results = buscar_plataformas_video(query, limit=2)
-
-    urls = buscar_urls_en_web(query, max_links=3)
-    paginas = []
-    if urls:
-        with ThreadPoolExecutor(max_workers=3) as executor:
-            paginas = list(filter(None, executor.map(descargar_pagina, urls)))
-    ia_data = extraer_multiples_fuentes_con_ia(paginas, query) if paginas else {}
-
+    # Dedup torrents por hash
     all_trackers = prowlarr_results + tracker_results
     seen_hashes = set()
     unique_trackers = []
@@ -539,6 +581,12 @@ def procesar_busqueda_universal(query: str):
             seen_hashes.add(h)
             unique_trackers.append(t)
 
+    # Ordenar torrents por seeders (más seeders primero)
+    try:
+        unique_trackers.sort(key=lambda x: int(x.get("seeders", 0)), reverse=True)
+    except (ValueError, TypeError):
+        pass
+
     titulo = query
     poster_url = None
     if tmdb_info:
@@ -549,7 +597,13 @@ def procesar_busqueda_universal(query: str):
 
     all_reproductores = youtube_results + video_platform_results
     if ia_data and ia_data.get("reproductores_online"):
-        all_reproductores += ia_data["reproductores_online"]
+        for r in ia_data["reproductores_online"]:
+            all_reproductores.append({
+                "nombre": r.get("servidor", "Web"),
+                "servidor": "WEB",
+                "duracion": "",
+                "url": r.get("url", "")
+            })
 
     resultado_final = {
         "titulo": ia_data.get("titulo", titulo) if ia_data else titulo,
@@ -569,13 +623,169 @@ def procesar_busqueda_universal(query: str):
                 "peso": "N/A",
                 "seeders": "-",
                 "magnet": m.get("magnet", ""),
-                "fuente": "Web Scrape"
+                "fuente": "🌐 Web"
             })
 
     if unique_trackers or ia_data or all_reproductores:
         save_to_cache(query, resultado_final)
 
     return resultado_final, False
+
+
+def _buscar_prowlarr_multi(search_queries):
+    results = []
+    for sq in search_queries[:4]:
+        results.extend(buscar_prowlarr(sq, limit=15))
+        if len(results) >= 30:
+            break
+    return results
+
+
+def _buscar_apibay_multi(search_queries):
+    results = []
+    for sq in search_queries[:3]:
+        results.extend(buscar_torrents_trackers(sq, limit=15))
+        if len(results) >= 15:
+            break
+    return results
+
+
+def _buscar_youtube_multi(search_queries):
+    results = []
+    for sq in search_queries[:2]:
+        results = buscar_youtube_ytdlp(sq, limit=10)
+        if results:
+            break
+    return results
+
+
+def _buscar_web_ia(query):
+    urls = buscar_urls_en_web(query, max_links=6)
+    paginas = []
+    if urls:
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            paginas = list(filter(None, executor.map(descargar_pagina, urls)))
+    return extraer_multiples_fuentes_con_ia(paginas, query) if paginas else {}
+
+
+# ==============================================================================
+# CONSTRUIR LISTA ENUMERADA DE RESULTADOS PARA EL MENSAJE
+# ==============================================================================
+def _build_results_list(resultado):
+    """Construye una lista unificada y enumerada de todos los resultados."""
+    items = []
+
+    # Torrents
+    for ti, t in enumerate(resultado.get("opciones_trackers", [])):
+        seeders = t.get("seeders", "0")
+        items.append({
+            "type": "torrent",
+            "original_idx": ti,
+            "nombre": t.get("nombre", "Torrent"),
+            "detalle": f"💾 {t.get('peso', '?')} | 🌱 {seeders} seeds | {t.get('fuente', '')}",
+            "short_label": f"🧲 {t.get('peso', '?')}",
+        })
+
+    # Videos (YT, DM, Web)
+    for vi, v in enumerate(resultado.get("reproductores_online", [])):
+        srv = v.get("servidor", "WEB")
+        dur = v.get("duracion", "")
+        dur_text = f" | ⏱ {dur}" if dur else ""
+        items.append({
+            "type": "video",
+            "original_idx": vi,
+            "nombre": v.get("nombre", "Video"),
+            "detalle": f"📹 {srv}{dur_text}",
+            "short_label": f"📹 {srv}",
+        })
+
+    # DDL
+    for di, d in enumerate(resultado.get("descargas_directas", [])):
+        items.append({
+            "type": "ddl",
+            "original_idx": di,
+            "nombre": f"{d.get('servidor', 'DDL')} - {d.get('calidad', 'HD')}",
+            "detalle": f"📥 {d.get('servidor', 'DDL')} ({d.get('calidad', 'HD')})",
+            "short_label": f"📥 {d.get('servidor', 'DDL')[:8]}",
+        })
+
+    return items
+
+
+
+def _build_page_message(resultado, items, page, session_id, user_id):
+    """Construye el texto del mensaje y los botones para una página específica."""
+    total = len(items)
+    total_pages = max(1, (total + RESULTS_PER_PAGE - 1) // RESULTS_PER_PAGE)
+    page = max(0, min(page, total_pages - 1))
+
+    start = page * RESULTS_PER_PAGE
+    end = min(start + RESULTS_PER_PAGE, total)
+    page_items = items[start:end]
+
+    # --- Cabecera ---
+    titulo = resultado.get("titulo", "Búsqueda")
+    calidad = resultado.get("calidad", "")
+    idioma = resultado.get("idioma", "")
+    tmdb = resultado.get("tmdb_info")
+
+    trackers = resultado.get("opciones_trackers", [])
+    videos = resultado.get("reproductores_online", [])
+    directas = resultado.get("descargas_directas", [])
+
+    caption = f"🎬 <b>{titulo}</b>\n"
+    if calidad:
+        caption += f"📊 <b>Calidad:</b> <code>{calidad}</code>\n"
+    if idioma:
+        caption += f"🌐 <b>Audio:</b> <code>{idioma}</code>\n"
+
+    if tmdb and tmdb.get("sinopsis"):
+        caption += f"\n📖 <i>{tmdb['sinopsis'][:200]}</i>\n"
+
+    caption += f"\n📦 <b>Total:</b> 🧲 {len(trackers)} torrents | 📹 {len(videos)} videos | 📥 {len(directas)} DDL\n"
+    caption += f"📄 <b>Pág {page + 1}/{total_pages}</b> — Resultados {start + 1}-{end} de {total}\n"
+    caption += "━━━━━━━━━━━━━━━━━━━━━━━\n"
+
+    # --- Lista enumerada de resultados de esta página ---
+    for i, item in enumerate(page_items):
+        num = start + i + 1
+        nombre_corto = item["nombre"][:65]
+        caption += f"\n<b>{num}.</b> <code>{nombre_corto}</code>\n"
+        caption += f"     {item['detalle']}\n"
+
+    caption += "\n━━━━━━━━━━━━━━━━━━━━━━━"
+    caption += Config.WATERMARK_FOOTER
+
+    # --- Botones ---
+    buttons = ButtonMaker()
+
+    # Botones de descarga para los items de esta página
+    for i, item in enumerate(page_items):
+        num = start + i + 1
+        global_idx = start + i
+
+        if item["type"] == "torrent":
+            btn_text = f"⬇️ #{num} {item['short_label']} {item['nombre'][:22]}"
+            buttons.data_button(btn_text, f"b_dl_qbt:{session_id}:{global_idx}")
+        elif item["type"] == "video":
+            btn_text = f"⬇️ #{num} {item['short_label']} {item['nombre'][:22]}"
+            buttons.data_button(btn_text, f"b_dl_yt:{session_id}:{global_idx}")
+        elif item["type"] == "ddl":
+            btn_text = f"⬇️ #{num} {item['short_label']}"
+            buttons.data_button(btn_text, f"b_dl_ddl:{session_id}:{global_idx}")
+
+    # Botones de navegación
+    nav_buttons = []
+    if page > 0:
+        buttons.data_button("◀️ Anterior", f"b_page:{session_id}:{page - 1}")
+    if page < total_pages - 1:
+        buttons.data_button("▶️ Siguiente", f"b_page:{session_id}:{page + 1}")
+
+    buttons.data_button("❌ Cerrar", f"b_close:{user_id}")
+
+    reply_markup = buttons.build_menu(1)
+    return caption, reply_markup
+
 
 # ==============================================================================
 # TELEGRAM HANDLERS & COMANDOS
@@ -594,59 +804,34 @@ async def buscar(client, message: Message):
     query = text[1].strip()
     status_msg = await send_message(
         message,
-        f"🤖 <b>Rastreando con IA, TMDb y Prowlarr:</b> <i>'{query}'</i>..."
+        f"🤖 <b>Rastreando con IA, TMDb, Prowlarr y ApiBay:</b> <i>'{query}'</i>...\n"
+        f"⏳ <i>Buscando en todos los motores en paralelo...</i>"
     )
 
     try:
         resultado, was_cached = await sync_to_async(procesar_busqueda_universal, query)
         user_id = message.from_user.id if message.from_user else 0
         session_id = f"{user_id}_{int(os.urandom(4).hex(), 16)}"
-        SEARCH_SESSION_CACHE[session_id] = resultado
 
-        # Construir Texto
-        titulo = resultado.get("titulo", query)
-        calidad = resultado.get("calidad", "Multi-Calidad")
-        idioma = resultado.get("idioma", "Varios")
-        trackers = resultado.get("opciones_trackers", [])
-        reproductores = resultado.get("reproductores_online", [])
-        directas = resultado.get("descargas_directas", [])
-        tmdb = resultado.get("tmdb_info")
+        # Construir lista unificada de resultados
+        items = _build_results_list(resultado)
 
-        caption = f"🎬 <b>{titulo}</b>\n"
-        if calidad:
-            caption += f"📊 <b>Calidad:</b> <code>{calidad}</code>\n"
-        if idioma:
-            caption += f"🌐 <b>Audio/Idioma:</b> <code>{idioma}</code>\n"
+        # Guardar en caché de sesión (resultado + items para paginación)
+        SEARCH_SESSION_CACHE[session_id] = {
+            "resultado": resultado,
+            "items": items,
+            "user_id": user_id,
+        }
 
-        if tmdb and tmdb.get("sinopsis"):
-            caption += f"\n📖 <b>Sinopsis:</b>\n<i>{tmdb['sinopsis']}</i>\n"
+        if not items:
+            await edit_message(
+                status_msg,
+                f"😕 <b>No se encontraron resultados para:</b> <i>'{query}'</i>\n"
+                f"<i>Intenta con otro nombre o en inglés.</i>"
+            )
+            return
 
-        caption += f"\n📦 <b>Opciones encontradas:</b>\n"
-        caption += f"• 🧲 Torrents / Magnets: <b>{len(trackers)}</b>\n"
-        caption += f"• 📹 Streaming / Videos: <b>{len(reproductores)}</b>\n"
-        caption += f"• 🌐 Descargas Directas: <b>{len(directas)}</b>\n"
-
-        caption += Config.WATERMARK_FOOTER
-
-        # Construir Botones Interactivos
-        buttons = ButtonMaker()
-
-        # Botones de Torrents
-        for idx, t in enumerate(trackers[:5]):
-            btn_text = f"🧲 [{t.get('peso', 'N/A')}] {t.get('nombre', 'Torrent')[:25]}"
-            buttons.data_button(btn_text, f"b_dl_qbt:{session_id}:{idx}")
-
-        # Botones de Videos / Direct
-        for idx, v in enumerate(reproductores[:3]):
-            btn_text = f"🚀 {v.get('servidor', 'Video')} - {v.get('nombre', 'Ver')[:20]}"
-            buttons.data_button(btn_text, f"b_dl_yt:{session_id}:{idx}")
-
-        for idx, d in enumerate(directas[:3]):
-            btn_text = f"📥 {d.get('servidor', 'DDL')} ({d.get('calidad', 'HD')})"
-            buttons.data_button(btn_text, f"b_dl_ddl:{session_id}:{idx}")
-
-        buttons.data_button("❌ Cerrar", f"b_close:{user_id}")
-        reply_markup = buttons.build_menu(1)
+        caption, reply_markup = _build_page_message(resultado, items, 0, session_id, user_id)
 
         poster_url = resultado.get("poster_url")
         if poster_url:
@@ -683,25 +868,58 @@ async def ai_search_callback(client, query: CallbackQuery):
     parts = data.split(":")
     action = parts[0]
     session_id = parts[1]
+
+    # --- PAGINACIÓN ---
+    if action == "b_page":
+        page = int(parts[2])
+        session = SEARCH_SESSION_CACHE.get(session_id)
+        if not session:
+            await query.answer("⚠️ Sesión expirada. Realiza una nueva búsqueda.", show_alert=True)
+            return
+
+        resultado = session["resultado"]
+        items = session["items"]
+        s_user_id = session["user_id"]
+
+        caption, reply_markup = _build_page_message(resultado, items, page, session_id, s_user_id)
+
+        try:
+            await edit_message(query.message, caption, reply_markup)
+        except MessageNotModified:
+            pass
+        await query.answer()
+        return
+
+    # --- DESCARGAS ---
     idx = int(parts[2])
 
-    resultado = SEARCH_SESSION_CACHE.get(session_id)
-    if not resultado:
+    session = SEARCH_SESSION_CACHE.get(session_id)
+    if not session:
         await query.answer("⚠️ La sesión de búsqueda ha expirado. Realiza una nueva búsqueda.", show_alert=True)
         return
 
+    resultado = session["resultado"]
+    items = session["items"]
+
+    if idx >= len(items):
+        await query.answer("⚠️ Resultado no disponible.", show_alert=True)
+        return
+
+    item = items[idx]
+
     if action == "b_dl_qbt":
+        oidx = item.get("original_idx", 0)
         trackers = resultado.get("opciones_trackers", [])
-        if idx >= len(trackers):
+        if oidx >= len(trackers):
             await query.answer("Torrent no disponible.", show_alert=True)
             return
-        torrent_item = trackers[idx]
+        torrent_item = trackers[oidx]
         magnet = torrent_item.get("magnet")
         name = torrent_item.get("nombre", "Torrent")
 
-        await query.answer(f"Iniciando descarga Leech: {name[:30]}...", show_alert=False)
+        await query.answer(f"Iniciando descarga: {name[:30]}...", show_alert=False)
         cmd_msg = await query.message.reply_text(
-            f"🧲 <b>Iniciando Leech Torrent:</b> <code>{name}</code>\n"
+            f"🧲 <b>Iniciando Leech Torrent:</b> <code>{name[:60]}</code>\n"
             f"<i>Enviando a qBittorrent...</i>"
         )
         cmd_msg.text = f"/qbleech {magnet}"
@@ -711,17 +929,18 @@ async def ai_search_callback(client, query: CallbackQuery):
         bot_loop.create_task(mirror_task.new_event())
 
     elif action == "b_dl_yt":
+        oidx = item.get("original_idx", 0)
         reproductores = resultado.get("reproductores_online", [])
-        if idx >= len(reproductores):
+        if oidx >= len(reproductores):
             await query.answer("Video no disponible.", show_alert=True)
             return
-        video_item = reproductores[idx]
+        video_item = reproductores[oidx]
         url = video_item.get("url")
         name = video_item.get("nombre", "Video")
 
         await query.answer(f"Iniciando Leech Video: {name[:30]}...", show_alert=False)
         cmd_msg = await query.message.reply_text(
-            f"🚀 <b>Iniciando Selector de Formatos y Calidad:</b> <code>{name}</code>\n"
+            f"🚀 <b>Iniciando Selector de Formatos y Calidad:</b> <code>{name[:60]}</code>\n"
             f"<i>Extrayendo calidades disponibles (Video / Audio)...</i>"
         )
         cmd_msg.text = f"/ytdlleech -s {url}"
@@ -732,11 +951,12 @@ async def ai_search_callback(client, query: CallbackQuery):
         bot_loop.create_task(ytdl_task.new_event())
 
     elif action == "b_dl_ddl":
+        oidx = item.get("original_idx", 0)
         directas = resultado.get("descargas_directas", [])
-        if idx >= len(directas):
+        if oidx >= len(directas):
             await query.answer("Enlace no disponible.", show_alert=True)
             return
-        ddl_item = directas[idx]
+        ddl_item = directas[oidx]
         url = ddl_item.get("url")
         name = ddl_item.get("servidor", "Descarga Directa")
 
@@ -750,3 +970,4 @@ async def ai_search_callback(client, query: CallbackQuery):
 
         mirror_task = Mirror(client, cmd_msg, is_leech=True)
         bot_loop.create_task(mirror_task.new_event())
+
