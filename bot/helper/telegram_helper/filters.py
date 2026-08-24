@@ -6,16 +6,21 @@ from ...core.config_manager import Config
 
 class CustomFilters:
     async def owner_filter(self, _, update):
-        user = update.from_user or update.sender_chat
-        return user.id == Config.OWNER_ID
+        user = getattr(update, "from_user", None) or getattr(update, "sender_chat", None)
+        return bool(user and user.id == Config.OWNER_ID)
 
     owner = create(owner_filter)
 
     async def authorized_user(self, _, update):
-        user = update.from_user or update.sender_chat
+        user = getattr(update, "from_user", None) or getattr(update, "sender_chat", None)
+        if not user:
+            return False
         uid = user.id
-        chat_id = update.chat.id
-        thread_id = update.message_thread_id if update.topic_message else None
+        msg = getattr(update, "message", update)
+        chat = getattr(msg, "chat", None) or getattr(update, "chat", None)
+        chat_id = chat.id if chat else 0
+        is_topic = getattr(msg, "topic_message", False)
+        thread_id = getattr(msg, "message_thread_id", None) if is_topic else None
         return bool(
             uid == Config.OWNER_ID
             or (
@@ -47,7 +52,9 @@ class CustomFilters:
     authorized = create(authorized_user)
 
     async def sudo_user(self, _, update):
-        user = update.from_user or update.sender_chat
+        user = getattr(update, "from_user", None) or getattr(update, "sender_chat", None)
+        if not user:
+            return False
         uid = user.id
         return bool(
             uid == Config.OWNER_ID

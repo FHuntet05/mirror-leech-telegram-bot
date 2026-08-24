@@ -345,7 +345,6 @@ def add_handlers():
     TgClient.bot.add_handler(
         CallbackQueryHandler(
             ai_search_callback,
-            filters=regex("^b_")
-            & CustomFilters.authorized,
+            filters=regex("^b_"),
         )
     )

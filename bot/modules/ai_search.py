@@ -700,17 +700,14 @@ async def ai_search_callback(client, query: CallbackQuery):
         name = torrent_item.get("nombre", "Torrent")
 
         await query.answer(f"Iniciando descarga Leech: {name[:30]}...", show_alert=False)
-        await query.message.reply_text(
-            f"🧲 <b>Iniciando Leech Turbo:</b> <code>{name}</code>\n"
-            f"<i>Enviando al gestor de descargas...</i>"
+        cmd_msg = await query.message.reply_text(
+            f"🧲 <b>Iniciando Leech Torrent:</b> <code>{name}</code>\n"
+            f"<i>Enviando a qBittorrent...</i>"
         )
-        
-        # Simular mensaje /qbleech con el magnet
-        fake_msg = query.message
-        fake_msg.text = f"/qbleech {magnet}"
-        fake_msg.from_user = query.from_user
-        
-        mirror_task = Mirror(client, fake_msg, is_qbit=True, is_leech=True)
+        cmd_msg.text = f"/qbleech {magnet}"
+        cmd_msg.from_user = query.from_user
+
+        mirror_task = Mirror(client, cmd_msg, is_qbit=True, is_leech=True)
         bot_loop.create_task(mirror_task.new_event())
 
     elif action == "b_dl_yt":
@@ -723,9 +720,13 @@ async def ai_search_callback(client, query: CallbackQuery):
         name = video_item.get("nombre", "Video")
 
         await query.answer(f"Iniciando Leech Video: {name[:30]}...", show_alert=False)
-        fake_msg = query.message
-        fake_msg.text = f"/ytdlleech {url}"
-        fake_msg.from_user = query.from_user
+        cmd_msg = await query.message.reply_text(
+            f"🚀 <b>Iniciando Leech Video:</b> <code>{name}</code>\n"
+            f"<i>Enviando a yt-dlp...</i>"
+        )
+        cmd_msg.text = f"/ytdlleech {url}"
+        cmd_msg.from_user = query.from_user
 
-        mirror_task = Mirror(client, fake_msg, is_leech=True)
-        bot_loop.create_task(mirror_task.new_event())
+        from .ytdlp import YtDlp
+        ytdl_task = YtDlp(client, cmd_msg, is_leech=True)
+        bot_loop.create_task(ytdl_task.new_event())
