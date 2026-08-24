@@ -721,10 +721,10 @@ async def ai_search_callback(client, query: CallbackQuery):
 
         await query.answer(f"Iniciando Leech Video: {name[:30]}...", show_alert=False)
         cmd_msg = await query.message.reply_text(
-            f"🚀 <b>Iniciando Leech Video:</b> <code>{name}</code>\n"
-            f"<i>Enviando a yt-dlp...</i>"
+            f"🚀 <b>Iniciando Selector de Formatos y Calidad:</b> <code>{name}</code>\n"
+            f"<i>Extrayendo calidades disponibles (Video / Audio)...</i>"
         )
-        cmd_msg.text = f"/ytdlleech {url}"
+        cmd_msg.text = f"/ytdlleech -s {url}"
         cmd_msg.from_user = query.from_user
 
         from .ytdlp import YtDlp

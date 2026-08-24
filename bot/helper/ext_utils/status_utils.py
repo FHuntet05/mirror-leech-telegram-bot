@@ -255,7 +255,7 @@ async def get_readable_message(sid, is_user, page_no=1, status="All", page_step=
     if task_gids:
         cancel_buttons = [
             InlineKeyboardButton(
-                text=f"{num}",
+                text=f"🚫 Cancelar {num}" if len(task_gids) > 1 else "🚫 Cancelar Tarea",
                 callback_data=f"status {sid} canconf {mid}",
                 style=ButtonStyle.DANGER
             )

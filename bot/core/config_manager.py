@@ -119,7 +119,7 @@ class Config:
     TELEGRAM_HASH = ""
     TG_PROXY = {}
     THUMBNAIL_LAYOUT = ""
-    TORRENT_TIMEOUT = 0
+    TORRENT_TIMEOUT = 120
     UPLOAD_PATHS = {}
     UPSTREAM_REPO = ""
     UPSTREAM_BRANCH = "master"
