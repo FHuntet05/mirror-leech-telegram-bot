@@ -17,5 +17,6 @@ downloads/*
 *.session
 __pycache__/
 .env
+.env.example
 string_session.txt
 multimedia_cache.db
