@@ -641,9 +641,9 @@ async def buscar(client, message: Message):
             btn_text = f"🚀 {v.get('servidor', 'Video')} - {v.get('nombre', 'Ver')[:20]}"
             buttons.data_button(btn_text, f"b_dl_yt:{session_id}:{idx}")
 
-        for idx, d in enumerate(directas[:2]):
-            btn_text = f"🌐 {d.get('servidor', 'DDL')} ({d.get('calidad', 'HD')})"
-            buttons.url_button(btn_text, d.get("url", ""))
+        for idx, d in enumerate(directas[:3]):
+            btn_text = f"📥 {d.get('servidor', 'DDL')} ({d.get('calidad', 'HD')})"
+            buttons.data_button(btn_text, f"b_dl_ddl:{session_id}:{idx}")
 
         buttons.data_button("❌ Cerrar", f"b_close:{user_id}")
         reply_markup = buttons.build_menu(1)
@@ -730,3 +730,23 @@ async def ai_search_callback(client, query: CallbackQuery):
         from .ytdlp import YtDlp
         ytdl_task = YtDlp(client, cmd_msg, is_leech=True)
         bot_loop.create_task(ytdl_task.new_event())
+
+    elif action == "b_dl_ddl":
+        directas = resultado.get("descargas_directas", [])
+        if idx >= len(directas):
+            await query.answer("Enlace no disponible.", show_alert=True)
+            return
+        ddl_item = directas[idx]
+        url = ddl_item.get("url")
+        name = ddl_item.get("servidor", "Descarga Directa")
+
+        await query.answer(f"Iniciando Leech Directo: {name}...", show_alert=False)
+        cmd_msg = await query.message.reply_text(
+            f"📥 <b>Iniciando Leech Directo:</b> <code>{name}</code>\n"
+            f"<i>Descargando y subiendo a Telegram...</i>"
+        )
+        cmd_msg.text = f"/leech {url}"
+        cmd_msg.from_user = query.from_user
+
+        mirror_task = Mirror(client, cmd_msg, is_leech=True)
+        bot_loop.create_task(mirror_task.new_event())
