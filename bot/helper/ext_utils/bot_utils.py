@@ -150,6 +150,8 @@ def arg_parser(items, arg_base):
             else:
                 sub_list = []
                 for j in range(i + 1, total):
+                    if items[j].startswith(("http://", "https://", "magnet:", "tg:", "tp:")) and part not in ["-up", "-rcf", "link"]:
+                        break
                     if items[j] in arg_base:
                         if part == "-c" and items[j] == "-c":
                             sub_list.append(items[j])
@@ -185,6 +187,11 @@ def arg_parser(items, arg_base):
         link_items = items[:arg_start] if arg_start != -1 else items
         if link_items:
             arg_base["link"] = " ".join(link_items)
+        if not arg_base["link"]:
+            for item in items:
+                if item.startswith(("http://", "https://", "magnet:", "tg:", "tp:")):
+                    arg_base["link"] = item
+                    break
 
 
 def get_size_bytes(size):
